@@ -90,6 +90,13 @@ async function sbInsertVote(qkey, value) {
     })
   });
 }
+// Histogramm (0..100 in 5er-Bins) fuer die Verteilungskurve
+const BARO_NBINS = 21;
+function makeBins(values) {
+  const b = new Array(BARO_NBINS).fill(0);
+  for (const v of values || []) b[Math.max(0, Math.min(BARO_NBINS - 1, Math.round(v / 5)))]++;
+  return b;
+}
 // Alle Stimmen holen und je Frage aggregieren.
 async function sbFetchStats() {
   const r = await fetch(`${SB_URL}/rest/v1/votes?select=qkey,value`, {
@@ -108,21 +115,25 @@ async function sbFetchStats() {
     } else {
       const o = baro[row.qkey] = baro[row.qkey] || {
         sum: 0,
-        count: 0
+        count: 0,
+        vals: []
       };
       o.sum += row.value;
       o.count++;
+      o.vals.push(row.value);
     }
   }
   const baroOut = k => {
     const o = baro[k];
     if (!o || !o.count) return {
       avg: 0,
-      count: 0
+      count: 0,
+      bins: makeBins([])
     };
     return {
       avg: Math.round(o.sum / o.count),
-      count: o.count
+      count: o.count,
+      bins: makeBins(o.vals)
     };
   };
   return {
@@ -271,12 +282,14 @@ function parseObj(raw) {
 function baroStats(arr) {
   if (!arr || !arr.length) return {
     avg: 0,
-    count: 0
+    count: 0,
+    bins: makeBins([])
   };
   const s = arr.reduce((a, b) => a + b, 0);
   return {
     avg: Math.round(s / arr.length),
-    count: arr.length
+    count: arr.length,
+    bins: makeBins(arr)
   };
 }
 async function castBaro(key, val) {
@@ -433,10 +446,84 @@ function baroColor(v) {
   return mixStops(BARO_STOPS, Math.max(0, Math.min(100, v)) / 100);
 }
 
-// Barometer-Anzeige (0-100): Wert, Marker und Zonen farblich gekennzeichnet
+// Glatte Verteilungskurve (KDE) aus dem Histogramm bins (0..100)
+function BaroCurve({
+  bins,
+  avg,
+  big
+}) {
+  const W = 1000,
+    H = big ? 150 : 110,
+    PAD = 8;
+  const baseY = H - PAD,
+    topY = 14;
+  const nb = bins ? bins.length : 0;
+  const sigma = 9,
+    N = 100;
+  const dens = [];
+  let maxD = 0;
+  for (let s = 0; s <= N; s++) {
+    const x = s / N * 100;
+    let d = 0;
+    for (let i = 0; i < nb; i++) {
+      const w = bins[i];
+      if (!w) continue;
+      const z = (x - i * 5) / sigma;
+      d += w * Math.exp(-0.5 * z * z);
+    }
+    dens.push(d);
+    if (d > maxD) maxD = d;
+  }
+  const hasData = maxD > 0;
+  const pts = [];
+  for (let s = 0; s <= N; s++) {
+    const x = (s / N * W).toFixed(1);
+    const y = (hasData ? baseY - dens[s] / maxD * (baseY - topY) : baseY).toFixed(1);
+    pts.push(x + "," + y);
+  }
+  const line = "M" + pts.join(" L");
+  const area = line + " L " + W + "," + baseY + " L 0," + baseY + " Z";
+  const avgX = Math.max(0, Math.min(100, avg)) / 100 * W;
+  return /*#__PURE__*/React.createElement("svg", {
+    viewBox: "0 0 " + W + " " + H,
+    preserveAspectRatio: "none",
+    style: {
+      width: "100%",
+      height: H,
+      display: "block",
+      overflow: "visible",
+      marginBottom: 4
+    }
+  }, hasData && /*#__PURE__*/React.createElement("path", {
+    d: area,
+    fill: C.teal,
+    fillOpacity: 0.16
+  }), /*#__PURE__*/React.createElement("path", {
+    d: line,
+    fill: "none",
+    stroke: C.teal,
+    strokeWidth: 2.5,
+    vectorEffect: "non-scaling-stroke",
+    strokeLinejoin: "round",
+    strokeLinecap: "round"
+  }), hasData && /*#__PURE__*/React.createElement("line", {
+    x1: avgX,
+    y1: topY - 6,
+    x2: avgX,
+    y2: baseY,
+    stroke: "#FFFFFF",
+    strokeWidth: 1.3,
+    strokeDasharray: "3 4",
+    opacity: 0.5,
+    vectorEffect: "non-scaling-stroke"
+  }));
+}
+
+// Barometer-Anzeige (0-100): Zahl, Verteilungskurve und Farbskala
 function BaroResult({
   avg,
   count,
+  bins,
   big,
   lowLabel,
   highLabel
@@ -466,24 +553,28 @@ function BaroResult({
       color: C.text2,
       fontSize: "clamp(14px,1.4vw,20px)"
     }
-  }, "/ 100 · ", count, " ", count === 1 ? "Stimme" : "Stimmen")), /*#__PURE__*/React.createElement("div", {
+  }, "/ 100 · ", count, " ", count === 1 ? "Stimme" : "Stimmen")), /*#__PURE__*/React.createElement(BaroCurve, {
+    bins: bins,
+    avg: avg,
+    big: big
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      height: big ? 30 : 22,
+      height: big ? 12 : 9,
       borderRadius: 999,
       background: BARO_GRADIENT,
-      opacity: 0.95
+      opacity: 0.9
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
-      top: -7,
-      bottom: -7,
-      left: `calc(${Math.max(0, Math.min(100, avg))}% - 4px)`,
-      width: 8,
-      borderRadius: 8,
+      top: -5,
+      bottom: -5,
+      left: `calc(${Math.max(0, Math.min(100, avg))}% - 3px)`,
+      width: 6,
+      borderRadius: 6,
       background: col,
-      boxShadow: "0 0 0 4px rgba(27,29,42,0.9), 0 6px 16px rgba(0,0,0,0.45)",
+      boxShadow: "0 0 0 3px rgba(27,29,42,0.9), 0 4px 12px rgba(0,0,0,0.45)",
       transition: "left 500ms cubic-bezier(.4,0,.2,1), background 500ms ease"
     }
   })), /*#__PURE__*/React.createElement("div", {
@@ -844,6 +935,7 @@ function InteractiveBlock({
   }, /*#__PURE__*/React.createElement(BaroResult, {
     avg: manualMode ? manualBaro : stats.avg,
     count: manualMode ? "manuell" : stats.count,
+    bins: manualMode ? makeBins([manualBaro]) : stats.bins,
     big: true,
     lowLabel: Q[baseQ(qkey)].low,
     highLabel: Q[baseQ(qkey)].high
@@ -1875,6 +1967,7 @@ function App() {
         }, "Vorher (zu Beginn)"), /*#__PURE__*/React.createElement(BaroResult, {
           avg: live.q1_before.baro.avg,
           count: live.q1_before.baro.count,
+          bins: live.q1_before.baro.bins,
           lowLabel: Q.q1.low,
           highLabel: Q.q1.high
         })), /*#__PURE__*/React.createElement(Card, {
