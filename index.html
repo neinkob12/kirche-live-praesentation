@@ -1938,41 +1938,43 @@ function App() {
         return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
           kicker: "Hinter den Kulissen",
           title: "KI-Prompts für diese Präsentation",
-          sub: "Diese Prompts haben bei den Umfrage-/Voting-Tools und der inhaltlichen Recherche geholfen — nicht beim Inhalt oder der Gestaltung der Folien selbst."
+          sub: "Diese Prompts haben bei der Umsetzung der gesamten Präsentation geholfen — beim Live-Voting-Tool, der inhaltlichen Recherche und beim Umbau der Folien in diese HTML-Seite. Auswahl, Gewichtung und Aussage der Inhalte stammen von mir."
         }), /*#__PURE__*/React.createElement("div", {
           style: {
             display: "flex",
             flexDirection: "column",
-            gap: 14
+            gap: 12,
+            overflowY: "auto",
+            paddingRight: 6
           }
-        }, ["Welche kostenlosen Live-Voting-Tools eignen sich, um während eines Vortrags per QR-Code anonym ein Stimmungsbild auf einer Skala 1–5 abzufragen — und wie bekomme ich die Ergebnisse in Echtzeit in eine Webpräsentation?", "Vergleiche Mentimeter, Slido und eine selbstgebaute Lösung über Google Forms/Sheets für ~30 Teilnehmende: Anonymität, Echtzeit-Aktualisierung, Teilnehmer-Limit und Kosten.", "Wie setze ich eine Live-Umfrage so auf, dass dieselbe Frage am Anfang und am Ende abgestimmt wird und sich die Veränderung des Durchschnitts automatisch berechnen und anzeigen lässt?", "Fasse die zentralen Zahlen der MHG-Studie (2018) zu sexuellem Missbrauch in der katholischen Kirche zusammen und nenne zu jeder Aussage die genaue Quelle.", "Wie häufig ist sexualisierte Gewalt im Vergleich in Familie, Sportvereinen und Kirche? Nenne belastbare Studien mit Jahr und Herausgeber und erkläre, warum direkte Vergleiche methodisch schwierig sind."].map((t, idx) => /*#__PURE__*/React.createElement(Card, {
+        }, ["Ich halte vor 15 Personen einen Vortrag über sexualisierte Gewalt in der katholischen Kirche und möchte das Publikum an mehreren Stellen live und anonym per QR-Code aufs Smartphone abstimmen lassen — teils über ein Stimmungsbarometer als Schieberegler von 0 bis 100, teils mit einer einfachen Zustimmung/Ablehnung. Empfiehl mir eine kostenlose, datensparsame Lösung, beschreibe das Setup Schritt für Schritt und erkläre, wie ich dieselbe Frage am Anfang und am Ende — mit einer Diskussionsrunde dazwischen — stellen kann, um die Veränderung des Stimmungsbildes sichtbar zu machen.", "Fasse die zentralen Ergebnisse der MHG-Studie (2018) zu sexualisiertem Missbrauch in der katholischen Kirche in Deutschland zusammen: Untersuchungszeitraum, Zahl der beschuldigten Kleriker und der betroffenen Minderjährigen, das geschätzte Dunkelfeld sowie die strukturellen Risikofaktoren, die die Studie benennt. Gib zu jeder Kennzahl die Quelle mit Jahr an und weise auf die methodischen Grenzen der Studie hin.", "Vergleiche die Häufigkeit sexualisierter Gewalt an Kindern und Jugendlichen in den Kontexten Familie, organisierter Sport und katholische Kirche. Nenne für jeden Bereich belastbare deutsche Studien mit Herausgeber und Erscheinungsjahr, setze die Fallzahlen ins Verhältnis zur Größe des jeweiligen Personenkreises und erkläre nachvollziehbar, warum ein direkter Eins-zu-eins-Vergleich der absoluten Zahlen methodisch problematisch ist.", "Erkläre, was den institutionellen Umgang der katholischen Kirche mit Missbrauch von anderen Organisationen unterscheidet: die Rolle von Klerikalismus, Zölibat und geschlossenen Machtstrukturen, der jahrzehntelange Umgang mit Tätern durch Versetzung statt Anzeige sowie der Stand von Aufarbeitung und Entschädigung seit 2010. Unterscheide klar zwischen empirisch belegten Fakten und Interpretation und nenne seriöse Quellen.", "Gib mir einen sachlich-neutralen Überblick über die gesellschaftliche und kirchliche Reaktion auf die Missbrauchsskandale in Deutschland: die Einrichtung des Unabhängigen Beauftragten für Fragen des sexuellen Kindesmissbrauchs (UBSKM), zentrale Maßnahmen und Selbstverpflichtungen der Deutschen Bischofskonferenz, die Entwicklung der Kirchenaustrittszahlen im zeitlichen Zusammenhang sowie die wichtigsten Kritikpunkte von Betroffenenverbänden.", "Ich habe eine fertige PowerPoint-Präsentation und möchte sie in eine einzelne, eigenständige HTML-Datei umbauen, die ich kostenlos über GitHub Pages veröffentlichen kann. Übernimm Reihenfolge, Texte und Struktur der Folien, baue eine Folien-Navigation per Pfeiltasten und Klick ein, sorge für eine responsive Darstellung auf Laptop und Smartphone und komme ohne externe Abhängigkeiten aus. Erkläre mir danach Schritt für Schritt, wie ich die Datei in ein GitHub-Repository hochlade und GitHub Pages aktiviere."].map((t, idx) => /*#__PURE__*/React.createElement(Card, {
           key: idx,
           accent: C.teal
         }, /*#__PURE__*/React.createElement("div", {
           style: {
             display: "flex",
             alignItems: "flex-start",
-            gap: 18
+            gap: 16
           }
         }, /*#__PURE__*/React.createElement("div", {
           style: {
-            width: 44,
-            height: 44,
-            borderRadius: 14,
+            width: 38,
+            height: 38,
+            borderRadius: 12,
             background: C.card2,
             color: C.teal,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontWeight: 700,
-            fontSize: 20,
+            fontSize: 18,
             flexShrink: 0
           }
         }, idx + 1), /*#__PURE__*/React.createElement("div", {
           style: {
-            fontSize: "clamp(14px,1.6vw,22px)",
+            fontSize: "clamp(12px,1.3vw,17px)",
             fontWeight: 500,
-            lineHeight: 1.4,
+            lineHeight: 1.45,
             fontStyle: "italic",
             color: C.text
           }
