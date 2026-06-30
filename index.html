@@ -935,20 +935,34 @@ function ComparisonCol({
 // ==========================================================
 //  Abstimmungs-Ansicht (Handy)
 // ==========================================================
+// Pro Gerät nur eine Stimme je Frage — übersteht auch ein Neuladen der Seite.
+function hasVoted(q) {
+  if (!q) return false;
+  try {
+    return localStorage.getItem("voted:" + q) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+function markVoted(q) {
+  try {
+    localStorage.setItem("voted:" + q, "1");
+  } catch (e) {}
+}
 function VoteView({
   activeQuestion,
   live
 }) {
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState(() => hasVoted(activeQuestion));
   const [val, setVal] = useState(50);
   const [sending, setSending] = useState(false);
   const lastQ = useRef(activeQuestion);
   useEffect(() => {
     if (activeQuestion !== lastQ.current) {
       lastQ.current = activeQuestion;
-      setDone(false);
       setVal(50);
       setSending(false);
+      setDone(hasVoted(activeQuestion));
     }
   }, [activeQuestion]);
 
@@ -1045,20 +1059,9 @@ function VoteView({
       style: {
         color: AC.label2,
         fontSize: 17,
-        lineHeight: 1.5,
-        marginBottom: 30
+        lineHeight: 1.5
       }
-    }, "Danke! Du kannst deine Meinung jederzeit ändern."), /*#__PURE__*/React.createElement("button", {
-      className: "pressable",
-      onClick: () => setDone(false),
-      style: {
-        ...btn(AC.bg2, AC.blue),
-        width: "auto",
-        padding: "14px 30px",
-        margin: "0 auto",
-        display: "inline-block"
-      }
-    }, "Neu abstimmen")));
+    }, "Danke, deine Stimme ist gespeichert. Sobald vorne die nächste Frage freigegeben wird, erscheint sie hier automatisch.")));
   }
 
   // --- Aktive Frage ---
@@ -1173,6 +1176,7 @@ function VoteView({
     onClick: async () => {
       setSending(true);
       await castBaro(activeQuestion, val);
+      markVoted(activeQuestion);
       setDone(true);
     },
     style: btn(AC.blue, "#fff")
@@ -1188,6 +1192,7 @@ function VoteView({
     onClick: async () => {
       setSending(true);
       await castAgree(activeQuestion, "a");
+      markVoted(activeQuestion);
       setDone(true);
     },
     style: {
@@ -1208,6 +1213,7 @@ function VoteView({
     onClick: async () => {
       setSending(true);
       await castAgree(activeQuestion, "d");
+      markVoted(activeQuestion);
       setDone(true);
     },
     style: {
@@ -1638,7 +1644,7 @@ function App() {
           style: {
             color: C.sand
           }
-        }, "Dunkelziffer:"), " Eine Ulmer Schätzung geht von rund ", /*#__PURE__*/React.createElement("b", null, "114.000"), " Betroffenen aus (katholische und evangelische Kirche zusammen). Diese Hochrechnung ist allerdings umstritten — „schwierige Datenbasis\".")), /*#__PURE__*/React.createElement(Quelle, null, "MHG-Studie, Deutsche Bischofskonferenz / Universitäten Mannheim, Heidelberg, Gießen"));
+        }, "Dunkelziffer:"), " Eine Ulmer Schätzung geht von rund ", /*#__PURE__*/React.createElement("b", null, "114.000"), " Betroffenen aus (katholische und evangelische Kirche zusammen). Diese Hochrechnung ist allerdings umstritten — „schwierige Datenbasis\".")));
 
       // 4 — Q1 Barometer (vorher)
       case 3:
@@ -1656,13 +1662,7 @@ function App() {
             fontWeight: 700,
             lineHeight: 1.2
           }
-        }, "„", Q.q1.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip), /*#__PURE__*/React.createElement("p", {
-          style: {
-            color: C.text2,
-            fontSize: "clamp(13px,1.3vw,18px)",
-            marginTop: 18
-          }
-        }, "Diese Frage stimmen wir am Ende noch einmal ab — um zu sehen, ob die Diskussion etwas bewegt."));
+        }, "„", Q.q1.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip));
 
       // 5 — Vergleich
       case 4:
