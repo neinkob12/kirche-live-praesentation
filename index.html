@@ -237,7 +237,7 @@ const SCREEN_QUESTION = {
   5: "q2",
   7: "q3",
   8: "q4",
-  9: "q1_after"
+  10: "q1_after"
 };
 const baseQ = k => k === "q1_before" || k === "q1_after" ? "q1" : k;
 const isAgree = k => Q[baseQ(k)].type === "agree";
@@ -864,7 +864,7 @@ function InteractiveBlock({
 // ==========================================================
 //  Screens (Inhalt)
 // ==========================================================
-const TOTAL = 11;
+const TOTAL = 12;
 function ScreenWrap({
   children
 }) {
@@ -1794,8 +1794,51 @@ function App() {
           }
         }, "„", Q.q4.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip));
 
-      // 10 — Abschluss-Barometer (Q1 Wiederholung, vorher/nachher)
+      // 10 — Diskussion (Leitfragen)
       case 9:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Jetzt seid ihr dran",
+          title: "Diskussion",
+          sub: "Bevor wir Frage 1 gleich noch einmal abstimmen — sprecht über die Thesen. Es gibt kein richtig oder falsch."
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: 16
+          }
+        }, ["Kann eine Institution, die jahrzehntelang vertuscht hat, ihre Glaubwürdigkeit zurückgewinnen — und wenn ja, wodurch?", "Ist der starke Fokus auf die Kirche berechtigt, obwohl Missbrauch in Familien und Vereinen zahlenmäßig häufiger ist?", "Wer trägt heute Verantwortung — die Institution, die Verantwortlichen von damals oder die heutigen Gläubigen?", "Was müsste passieren, damit ihr der Kirche im Umgang mit dem Thema (wieder) vertraut?"].map((t, idx) => /*#__PURE__*/React.createElement(Card, {
+          key: idx,
+          accent: C.teal
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 18
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            width: 44,
+            height: 44,
+            borderRadius: 14,
+            background: C.card2,
+            color: C.teal,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 700,
+            fontSize: 20,
+            flexShrink: 0
+          }
+        }, idx + 1), /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(16px,1.9vw,26px)",
+            fontWeight: 600,
+            lineHeight: 1.35
+          }
+        }, t))))));
+
+      // 11 — Q1 Wiederholung (vorher/nachher)
+      case 10:
         return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
           kicker: "Frage 1 · Wiederholung",
           title: "Hat sich etwas bewegt?"
@@ -1854,8 +1897,8 @@ function App() {
           } : live.q1_after.baro
         }));
 
-      // 11 — Abschluss & Quellen
-      case 10:
+      // 12 — Abschluss & Quellen
+      case 11:
         return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
           kicker: "Abschluss",
           title: "Spiegel der Gesellschaft — oder Sonderfall?",
