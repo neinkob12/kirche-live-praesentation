@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Missbrauch in der katholischen Kirche – Präsentation</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+  html,body,#root{height:100%;margin:0;background:#1B1D2A;}
+  *{-webkit-tap-highlight-color:transparent;box-sizing:border-box;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {
+  useState,
+  useEffect,
+  useRef
+} = React;
+
+/*
+  Interaktive Präsentation: "Missbrauch in der katholischen Kirche"
+  -----------------------------------------------------------------
+  Gebaut als Claude-Artifact (React). Auf dem iPad in claude.ai als
+  Artifact öffnen, Vollbild, ans Smartboard.
+
+  - Präsentationsmodus (Beamer/iPad): volle Präsentation, 11 Screens.
+  - Abstimmungsmodus (Handys): Link mit ?mode=vote ODER Button "Handy-Ansicht".
+  - Live-Voting über window.storage (shared). Fällt automatisch auf
+    localStorage zurück, falls window.storage nicht verfügbar ist.
+  - Manueller Fallback (Lehrer-Modus): Stimmen per +/- selbst eintragen,
+    falls das WLAN streikt. Funktioniert IMMER, ohne Internet.
+*/
+
+// ---------- Farbpalette (exakt nach Vorgabe) ----------
+const C = {
+  bg: "#1B1D2A",
+  card: "#242738",
+  card2: "#2B2E42",
+  teal: "#6FB3AC",
+  sand: "#D6A86A",
+  blue: "#7A92C2",
+  text: "#F2F3F7",
+  text2: "#A9AEC2",
+  approve: "#6FB3AC",
+  reject: "#C98B8B"
+};
+const FONT = '-apple-system, "SF Pro Display", "Inter", system-ui, sans-serif';
+
+// ---------- Supabase (echtes geräteübergreifendes Live-Voting) ----------
+// Trage hier Project-URL + anon public key aus deinem Supabase-Projekt ein
+// (Settings -> API). Solange die Platzhalter stehen, läuft alles wie bisher
+// lokal über localStorage (kein geteiltes Voting).
+const SB_URL = "https://uvhesvxobofgodkzacom.supabase.co";
+const SB_KEY = "sb_publishable_q71j5S7yH4hG-YV2w3XMtA_OEsEiI61";
+const SB_ON = SB_URL.startsWith("http") && !SB_URL.includes("DEIN-PROJEKT");
+const SB_HEADERS = {
+  apikey: SB_KEY,
+  Authorization: "Bearer " + SB_KEY,
+  "Content-Type": "application/json"
+};
+
+// Eine Stimme = eine Zeile (race-sicher). value: Barometer 0..100, Zustimmung 1=ja/0=nein.
+async function sbInsertVote(qkey, value) {
+  await fetch(`${SB_URL}/rest/v1/votes`, {
+    method: "POST",
+    headers: SB_HEADERS,
+    body: JSON.stringify({
+      qkey,
+      value
+    })
+  });
+}
+// Alle Stimmen holen und je Frage aggregieren.
+async function sbFetchStats() {
+  const r = await fetch(`${SB_URL}/rest/v1/votes?select=qkey,value`, {
+    headers: SB_HEADERS
+  });
+  const rows = await r.json();
+  const baro = {}; // qkey -> {sum,count}
+  const agree = {}; // qkey -> {a,d}
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (isAgree(row.qkey)) {
+      const o = agree[row.qkey] = agree[row.qkey] || {
+        a: 0,
+        d: 0
+      };
+      if (row.value === 1) o.a++;else o.d++;
+    } else {
+      const o = baro[row.qkey] = baro[row.qkey] || {
+        sum: 0,
+        count: 0
+      };
+      o.sum += row.value;
+      o.count++;
+    }
+  }
+  const baroOut = k => {
+    const o = baro[k];
+    if (!o || !o.count) return {
+      avg: 0,
+      count: 0
+    };
+    return {
+      avg: Math.round(o.sum / o.count),
+      count: o.count
+    };
+  };
+  return {
+    q1_before: baroOut("q1_before"),
+    q1_after: baroOut("q1_after"),
+    q3: baroOut("q3"),
+    q2: agree["q2"] || {
+      a: 0,
+      d: 0
+    },
+    q4: agree["q4"] || {
+      a: 0,
+      d: 0
+    }
+  };
+}
+// Reset (Vortragender): alle Stimmen einer Frage löschen.
+async function sbResetVotes(qkey) {
+  await fetch(`${SB_URL}/rest/v1/votes?qkey=eq.${encodeURIComponent(qkey)}`, {
+    method: "DELETE",
+    headers: SB_HEADERS
+  });
+}
+
+// ---------- Storage-Abstraktion (shared -> localStorage Fallback) ----------
+const Store = {
+  async get(key) {
+    if (SB_ON) {
+      try {
+        const r = await fetch(`${SB_URL}/rest/v1/app_state?k=eq.${encodeURIComponent(key)}&select=v`, {
+          headers: SB_HEADERS
+        });
+        const j = await r.json();
+        if (Array.isArray(j) && j.length) return j[0].v;
+        return null;
+      } catch (e) {}
+    }
+    try {
+      if (typeof window !== "undefined" && window.storage && window.storage.getItem) {
+        const v = await window.storage.getItem(key);
+        if (v !== undefined && v !== null) return v;
+      }
+    } catch (e) {}
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  },
+  async set(key, val) {
+    if (SB_ON) {
+      try {
+        // Upsert: ON CONFLICT(k) DO UPDATE
+        await fetch(`${SB_URL}/rest/v1/app_state`, {
+          method: "POST",
+          headers: {
+            ...SB_HEADERS,
+            Prefer: "resolution=merge-duplicates"
+          },
+          body: JSON.stringify({
+            k: key,
+            v: val
+          })
+        });
+        return true;
+      } catch (e) {}
+    }
+    let ok = false;
+    try {
+      if (typeof window !== "undefined" && window.storage && window.storage.setItem) {
+        // shared: true, damit alle Geräte am selben Link dieselben Stimmen sehen
+        await window.storage.setItem(key, val, {
+          shared: true
+        });
+        ok = true;
+      }
+    } catch (e) {}
+    try {
+      localStorage.setItem(key, val);
+    } catch (e) {}
+    return ok;
+  }
+};
+
+// ---------- Fragen-Metadaten ----------
+const Q = {
+  q1: {
+    type: "baro",
+    thesis: "Eine Institution, die jahrzehntelang Missbrauch vertuscht hat, kann ihre moralische Glaubwürdigkeit zurückgewinnen.",
+    low: "stimme gar nicht zu",
+    high: "stimme voll zu"
+  },
+  q2: {
+    type: "agree",
+    thesis: "Die katholische Kirche wird härter beurteilt als Sportvereine oder Familien, obwohl dort zahlenmäßig mehr Missbrauch passiert. Das ist unfair."
+  },
+  q3: {
+    type: "baro",
+    thesis: "Lenkt der starke Fokus auf die Kirche vom eigentlichen Problem ab?",
+    low: "lenkt ab",
+    high: "Fokus ist berechtigt"
+  },
+  q4: {
+    type: "agree",
+    thesis: "Die heutige Kirche und heutige Gläubige tragen Verantwortung für Taten, die Jahrzehnte zurückliegen."
+  }
+};
+
+// activeQuestion-Schlüssel je interaktivem Screen
+const SCREEN_QUESTION = {
+  3: "q1_before",
+  5: "q2",
+  7: "q3",
+  8: "q4",
+  9: "q1_after"
+};
+const baseQ = k => k === "q1_before" || k === "q1_after" ? "q1" : k;
+const isAgree = k => Q[baseQ(k)].type === "agree";
+
+// ---------- kleine Helfer ----------
+function parseArr(raw) {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
+function parseObj(raw) {
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" ? {
+      a: v.a || 0,
+      d: v.d || 0
+    } : {
+      a: 0,
+      d: 0
+    };
+  } catch (e) {
+    return {
+      a: 0,
+      d: 0
+    };
+  }
+}
+function baroStats(arr) {
+  if (!arr || !arr.length) return {
+    avg: 0,
+    count: 0
+  };
+  const s = arr.reduce((a, b) => a + b, 0);
+  return {
+    avg: Math.round(s / arr.length),
+    count: arr.length
+  };
+}
+async function castBaro(key, val) {
+  const v = Math.max(0, Math.min(100, Math.round(val)));
+  if (SB_ON) return sbInsertVote(key, v);
+  const arr = parseArr(await Store.get("vote:" + key));
+  arr.push(v);
+  await Store.set("vote:" + key, JSON.stringify(arr));
+}
+async function castAgree(key, choice) {
+  if (SB_ON) return sbInsertVote(key, choice === "a" ? 1 : 0);
+  const o = parseObj(await Store.get("vote:" + key));
+  o[choice] = (o[choice] || 0) + 1;
+  await Store.set("vote:" + key, JSON.stringify(o));
+}
+async function resetKey(key) {
+  if (SB_ON) return sbResetVotes(key);
+  await Store.set("vote:" + key, isAgree(key) ? JSON.stringify({
+    a: 0,
+    d: 0
+  }) : JSON.stringify([]));
+}
+
+// ---------- Count-up Hook für große Zahlen ----------
+function useCountUp(target, dur = 1000) {
+  const [v, setV] = useState(0);
+  const ref = useRef(0);
+  useEffect(() => {
+    let raf;
+    const from = 0;
+    const start = performance.now();
+    const tick = now => {
+      const p = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      ref.current = from + (target - from) * eased;
+      setV(ref.current);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, dur]);
+  return v;
+}
+
+// ==========================================================
+//  UI-Bausteine
+// ==========================================================
+function Card({
+  children,
+  style,
+  accent
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: `linear-gradient(160deg, ${C.card}, ${C.card2})`,
+      borderRadius: 24,
+      padding: "clamp(20px, 3vw, 40px)",
+      boxShadow: "0 18px 50px rgba(0,0,0,0.28)",
+      border: accent ? `1px solid ${accent}33` : "1px solid #ffffff0d",
+      ...style
+    }
+  }, children);
+}
+function BigStat({
+  value,
+  suffix = "",
+  label,
+  accent = C.teal,
+  format
+}) {
+  const v = useCountUp(value, 1100);
+  const shown = format ? format(v) : Math.round(v).toLocaleString("de-DE");
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: "clamp(40px, 6vw, 92px)",
+      fontWeight: 700,
+      lineHeight: 1,
+      color: accent,
+      letterSpacing: "-0.02em"
+    }
+  }, shown, suffix), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(13px, 1.3vw, 19px)",
+      maxWidth: 320
+    }
+  }, label));
+}
+function SectionTitle({
+  kicker,
+  title,
+  sub
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: "clamp(18px, 2.5vw, 36px)"
+    }
+  }, kicker && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.teal,
+      fontSize: "clamp(13px, 1.2vw, 17px)",
+      fontWeight: 600,
+      letterSpacing: "0.14em",
+      textTransform: "uppercase",
+      marginBottom: 12
+    }
+  }, kicker), /*#__PURE__*/React.createElement("h1", {
+    style: {
+      color: C.text,
+      fontSize: "clamp(28px, 4.2vw, 62px)",
+      fontWeight: 700,
+      lineHeight: 1.08,
+      margin: 0,
+      letterSpacing: "-0.02em"
+    }
+  }, title), sub && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(15px, 1.6vw, 24px)",
+      marginTop: 16,
+      lineHeight: 1.5,
+      maxWidth: 1000
+    }
+  }, sub));
+}
+
+// Farb-Interpolation: rosé (niedrig) -> sand (Mitte) -> teal (hoch)
+function hexToRgb(c) {
+  return [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+}
+function mixColor(c1, c2, t) {
+  const A = hexToRgb(c1),
+    B = hexToRgb(c2);
+  const m = i => Math.round(A[i] + (B[i] - A[i]) * t);
+  return `rgb(${m(0)}, ${m(1)}, ${m(2)})`;
+}
+function baroColor(v) {
+  const t = Math.max(0, Math.min(100, v)) / 100;
+  return t < 0.5 ? mixColor(C.reject, C.sand, t / 0.5) : mixColor(C.sand, C.teal, (t - 0.5) / 0.5);
+}
+
+// Barometer-Anzeige (0-100): Wert, Marker und Zonen farblich gekennzeichnet
+function BaroResult({
+  avg,
+  count,
+  big,
+  lowLabel,
+  highLabel
+}) {
+  const col = baroColor(avg);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "baseline",
+      gap: 14,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: big ? "clamp(48px, 8vw, 120px)" : "clamp(34px, 5vw, 72px)",
+      fontWeight: 700,
+      color: col,
+      lineHeight: 1,
+      transition: "color 500ms ease"
+    }
+  }, Math.round(avg)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(14px,1.4vw,20px)"
+    }
+  }, "/ 100 · ", count, " ", count === 1 ? "Stimme" : "Stimmen")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      height: big ? 30 : 22,
+      borderRadius: 999,
+      background: `linear-gradient(90deg, ${C.reject}, ${C.sand}, ${C.teal})`,
+      opacity: 0.95
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      top: -7,
+      bottom: -7,
+      left: `calc(${Math.max(0, Math.min(100, avg))}% - 4px)`,
+      width: 8,
+      borderRadius: 8,
+      background: col,
+      boxShadow: "0 0 0 4px rgba(27,29,42,0.9), 0 6px 16px rgba(0,0,0,0.45)",
+      transition: "left 500ms cubic-bezier(.4,0,.2,1), background 500ms ease"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 12,
+      fontSize: "clamp(12px,1.3vw,17px)",
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.reject,
+      display: "flex",
+      alignItems: "center",
+      gap: 7
+    }
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: C.reject
+  }), " ", lowLabel || "0 · Ablehnung"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.teal,
+      display: "flex",
+      alignItems: "center",
+      gap: 7
+    }
+  }, highLabel || "Zustimmung · 100", " ", /*#__PURE__*/React.createElement(Dot, {
+    c: C.teal
+  }))));
+}
+function Dot({
+  c
+}) {
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 10,
+      height: 10,
+      borderRadius: 999,
+      background: c,
+      display: "inline-block"
+    }
+  });
+}
+function AgreeResult({
+  a,
+  d
+}) {
+  const total = a + d;
+  const ap = total ? Math.round(a / total * 100) : 0;
+  const dp = total ? 100 - ap : 0;
+  const Row = ({
+    label,
+    val,
+    pct,
+    color
+  }) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginBottom: 8,
+      color: C.text,
+      fontSize: "clamp(16px,1.8vw,26px)",
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("span", null, label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color
+    }
+  }, pct, "% ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.text2,
+      fontWeight: 400,
+      fontSize: "0.7em"
+    }
+  }, "· ", val))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 26,
+      borderRadius: 999,
+      background: "#ffffff10",
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      width: `${total ? pct : 0}%`,
+      background: color,
+      borderRadius: 999,
+      transition: "width 500ms cubic-bezier(.4,0,.2,1)"
+    }
+  })));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%"
+    }
+  }, /*#__PURE__*/React.createElement(Row, {
+    label: "Zustimmung",
+    val: a,
+    pct: ap,
+    color: C.approve
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "Ablehnung",
+    val: d,
+    pct: dp,
+    color: C.reject
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(13px,1.3vw,18px)"
+    }
+  }, total, " ", total === 1 ? "Stimme" : "Stimmen", " insgesamt"));
+}
+
+// ==========================================================
+//  Steuerleiste / Panels für den Präsentationsmodus
+// ==========================================================
+function SharedHint() {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(11px,1vw,14px)",
+      marginTop: 10,
+      opacity: 0.8
+    }
+  }, "Hinweis: Die Stimmen werden live und für alle sichtbar geteilt.");
+}
+function QRPanel({
+  link,
+  setLink,
+  lead
+}) {
+  const voteLink = link && link.trim() ? link.trim() + (link.includes("?") ? "&" : "?") + "mode=vote" : "";
+  const qrSrc = voteLink ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=8&bgcolor=242738&color=F2F3F7&data=${encodeURIComponent(voteLink)}` : "";
+  return /*#__PURE__*/React.createElement(Card, {
+    style: {
+      minWidth: 280
+    },
+    accent: C.teal
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text,
+      fontWeight: 700,
+      marginBottom: 6,
+      fontSize: 20
+    }
+  }, "Einmal scannen — den ganzen Vortrag dabei"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: 14,
+      marginBottom: 14,
+      lineHeight: 1.45
+    }
+  }, lead || "Scannt diesen Code jetzt mit dem Handy. Die jeweils aktive Frage erscheint später automatisch — kein erneutes Scannen nötig."), /*#__PURE__*/React.createElement("input", {
+    value: link,
+    onChange: e => setLink(e.target.value),
+    placeholder: "Veröffentlichten Share-Link hier einfügen…",
+    style: {
+      width: "100%",
+      boxSizing: "border-box",
+      background: C.bg,
+      border: `1px solid ${C.teal}55`,
+      color: C.text,
+      borderRadius: 12,
+      padding: "10px 12px",
+      fontSize: 14,
+      marginBottom: 14,
+      outline: "none"
+    }
+  }), qrSrc ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("img", {
+    src: qrSrc,
+    alt: "QR-Code",
+    width: 260,
+    height: 260,
+    style: {
+      borderRadius: 16,
+      background: C.card
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: 12,
+      wordBreak: "break-all",
+      textAlign: "center"
+    }
+  }, voteLink)) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: 14
+    }
+  }, "Link einfügen → QR erscheint. (QR braucht Internet.)"));
+}
+
+// Manuelle Eingabe (Lehrer-Fallback)
+function ManualBaro({
+  value,
+  setValue
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.sand,
+      fontWeight: 600,
+      marginBottom: 10
+    }
+  }, "Manueller Modus — Durchschnitt selbst setzen"), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: 0,
+    max: 100,
+    value: value,
+    onChange: e => setValue(Number(e.target.value)),
+    style: {
+      width: "100%",
+      accentColor: C.teal,
+      height: 30
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(SmallBtn, {
+    onClick: () => setValue(Math.max(0, value - 5))
+  }, "−5"), /*#__PURE__*/React.createElement(SmallBtn, {
+    onClick: () => setValue(Math.min(100, value + 5))
+  }, "+5")));
+}
+function ManualAgree({
+  obj,
+  setObj
+}) {
+  const Stepper = ({
+    label,
+    k,
+    color
+  }) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color,
+      fontWeight: 600,
+      marginBottom: 8
+    }
+  }, label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text,
+      fontSize: 34,
+      fontWeight: 700,
+      marginBottom: 8
+    }
+  }, obj[k]), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      justifyContent: "center"
+    }
+  }, /*#__PURE__*/React.createElement(SmallBtn, {
+    onClick: () => setObj({
+      ...obj,
+      [k]: Math.max(0, obj[k] - 1)
+    })
+  }, "−"), /*#__PURE__*/React.createElement(SmallBtn, {
+    onClick: () => setObj({
+      ...obj,
+      [k]: obj[k] + 1
+    })
+  }, "+")));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.sand,
+      fontWeight: 600,
+      marginBottom: 12
+    }
+  }, "Manueller Modus — Handzeichen zählen"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 20
+    }
+  }, /*#__PURE__*/React.createElement(Stepper, {
+    label: "Zustimmung",
+    k: "a",
+    color: C.approve
+  }), /*#__PURE__*/React.createElement(Stepper, {
+    label: "Ablehnung",
+    k: "d",
+    color: C.reject
+  })));
+}
+function SmallBtn({
+  children,
+  onClick
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    style: {
+      background: "#ffffff14",
+      color: C.text,
+      border: "none",
+      borderRadius: 12,
+      padding: "8px 16px",
+      fontSize: 16,
+      fontWeight: 600,
+      cursor: "pointer",
+      minWidth: 48
+    }
+  }, children);
+}
+
+// Interaktiver Block: zeigt Live- oder Manuell-Ergebnis + Controls
+function InteractiveBlock({
+  qkey,
+  live,
+  manualMode,
+  manualBaro,
+  setManualBaro,
+  manualAgree,
+  setManualAgree,
+  onReset
+}) {
+  const agree = isAgree(qkey);
+  if (agree) {
+    const obj = manualMode ? manualAgree : live.agree;
+    return /*#__PURE__*/React.createElement(Card, {
+      accent: C.teal
+    }, /*#__PURE__*/React.createElement(AgreeResult, {
+      a: obj.a,
+      d: obj.d
+    }), manualMode && /*#__PURE__*/React.createElement(ManualAgree, {
+      obj: manualAgree,
+      setObj: setManualAgree
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 10,
+        marginTop: 18
+      }
+    }, !manualMode && /*#__PURE__*/React.createElement(SmallBtn, {
+      onClick: onReset
+    }, "Stimmen zurücksetzen")), !manualMode && /*#__PURE__*/React.createElement(SharedHint, null));
+  }
+  const stats = manualMode ? {
+    avg: manualBaro,
+    count: "manuell"
+  } : live.baro;
+  return /*#__PURE__*/React.createElement(Card, {
+    accent: C.teal
+  }, /*#__PURE__*/React.createElement(BaroResult, {
+    avg: manualMode ? manualBaro : stats.avg,
+    count: manualMode ? "manuell" : stats.count,
+    big: true,
+    lowLabel: Q[baseQ(qkey)].low,
+    highLabel: Q[baseQ(qkey)].high
+  }), manualMode && /*#__PURE__*/React.createElement(ManualBaro, {
+    value: manualBaro,
+    setValue: setManualBaro
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 18
+    }
+  }, !manualMode && /*#__PURE__*/React.createElement(SmallBtn, {
+    onClick: onReset
+  }, "Stimmen zurücksetzen")), !manualMode && /*#__PURE__*/React.createElement(SharedHint, null));
+}
+
+// ==========================================================
+//  Screens (Inhalt)
+// ==========================================================
+const TOTAL = 11;
+function ScreenWrap({
+  children
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      padding: "clamp(28px, 5vw, 90px)",
+      paddingBottom: 120,
+      boxSizing: "border-box"
+    }
+  }, children);
+}
+function ComparisonCol({
+  accent,
+  title,
+  items
+}) {
+  return /*#__PURE__*/React.createElement(Card, {
+    accent: accent,
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: accent,
+      fontWeight: 700,
+      fontSize: "clamp(17px,1.8vw,24px)",
+      marginBottom: 16
+    }
+  }, title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 16
+    }
+  }, items.map((it, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text,
+      fontWeight: 700,
+      fontSize: "clamp(24px,2.6vw,40px)",
+      lineHeight: 1
+    }
+  }, it.big), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(12px,1.2vw,16px)",
+      marginTop: 4
+    }
+  }, it.label)))));
+}
+
+// ==========================================================
+//  Abstimmungs-Ansicht (Handy)
+// ==========================================================
+function VoteView({
+  activeQuestion,
+  live
+}) {
+  const [done, setDone] = useState(false);
+  const [val, setVal] = useState(50);
+  const lastQ = useRef(activeQuestion);
+  useEffect(() => {
+    if (activeQuestion !== lastQ.current) {
+      lastQ.current = activeQuestion;
+      setDone(false);
+      setVal(50);
+    }
+  }, [activeQuestion]);
+  const wrap = inner => /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: C.bg,
+      color: C.text,
+      fontFamily: FONT,
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      padding: "28px 22px",
+      boxSizing: "border-box"
+    }
+  }, inner);
+  if (!activeQuestion) {
+    return wrap(/*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 44,
+        marginBottom: 16,
+        color: C.teal
+      }
+    }, "✓"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 24,
+        fontWeight: 700,
+        marginBottom: 8
+      }
+    }, "Du bist verbunden"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: C.text2,
+        fontSize: 16,
+        lineHeight: 1.5,
+        maxWidth: 340,
+        margin: "0 auto"
+      }
+    }, "Lass diese Seite einfach offen. Sobald vorne die nächste Frage freigegeben wird, erscheint sie hier automatisch — du musst nichts erneut scannen.")));
+  }
+  const bq = baseQ(activeQuestion);
+  const meta = Q[bq];
+  if (done) {
+    return wrap(/*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 44,
+        marginBottom: 16,
+        color: C.teal
+      }
+    }, "✓"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 24,
+        fontWeight: 700,
+        marginBottom: 10
+      }
+    }, "Danke, deine Stimme zählt!"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: C.text2,
+        marginBottom: 26
+      }
+    }, "Du kannst deine Meinung ändern und neu abstimmen."), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setDone(false),
+      style: btnStyle("#ffffff14", C.text)
+    }, "Neu abstimmen")));
+  }
+  return wrap(/*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: 13,
+      letterSpacing: "0.1em",
+      textTransform: "uppercase",
+      marginBottom: 14
+    }
+  }, "Live-Abstimmung"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: "clamp(20px,6vw,28px)",
+      fontWeight: 700,
+      lineHeight: 1.25,
+      marginBottom: 30
+    }
+  }, meta.thesis), meta.type === "baro" ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      fontSize: 64,
+      fontWeight: 700,
+      color: C.teal,
+      marginBottom: 8
+    }
+  }, val), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: 0,
+    max: 100,
+    value: val,
+    onChange: e => setVal(Number(e.target.value)),
+    style: {
+      width: "100%",
+      accentColor: C.teal,
+      height: 40
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      color: C.text2,
+      fontSize: 13,
+      marginTop: 4,
+      marginBottom: 30
+    }
+  }, /*#__PURE__*/React.createElement("span", null, meta.low), /*#__PURE__*/React.createElement("span", null, meta.high)), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      await castBaro(activeQuestion, val);
+      setDone(true);
+    },
+    style: btnStyle(C.teal, C.bg)
+  }, "Abstimmen")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 16
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      await castAgree(activeQuestion, "a");
+      setDone(true);
+    },
+    style: btnStyle(C.approve, C.bg)
+  }, "Zustimmung"), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      await castAgree(activeQuestion, "d");
+      setDone(true);
+    },
+    style: btnStyle(C.reject, C.bg)
+  }, "Ablehnung"))));
+}
+function btnStyle(bg, color) {
+  return {
+    width: "100%",
+    background: bg,
+    color,
+    border: "none",
+    borderRadius: 16,
+    padding: "18px 20px",
+    fontSize: 20,
+    fontWeight: 700,
+    cursor: "pointer"
+  };
+}
+
+// ==========================================================
+//  Haupt-App
+// ==========================================================
+function App() {
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams("");
+  const [voteMode, setVoteMode] = useState(params.get("mode") === "vote");
+  const [screen, setScreen] = useState(0);
+  const [link, setLink] = useState("");
+  const [showQR, setShowQR] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+
+  // Live-Daten aus dem Store
+  const [activeQuestion, setActiveQuestion] = useState(null);
+  const [live, setLive] = useState({
+    q1_before: {
+      baro: {
+        avg: 0,
+        count: 0
+      }
+    },
+    q1_after: {
+      baro: {
+        avg: 0,
+        count: 0
+      }
+    },
+    q2: {
+      agree: {
+        a: 0,
+        d: 0
+      }
+    },
+    q3: {
+      baro: {
+        avg: 0,
+        count: 0
+      }
+    },
+    q4: {
+      agree: {
+        a: 0,
+        d: 0
+      }
+    }
+  });
+
+  // Manuelle Werte (nur lokal beim Vortragenden)
+  const [manual, setManual] = useState({
+    q1_before: 50,
+    q1_after: 50,
+    q2: {
+      a: 0,
+      d: 0
+    },
+    q3: 50,
+    q4: {
+      a: 0,
+      d: 0
+    }
+  });
+
+  // Presenter setzt activeQuestion je nach Screen
+  useEffect(() => {
+    if (voteMode) return;
+    const q = SCREEN_QUESTION[screen] || "";
+    Store.set("activeQuestion", q);
+  }, [screen, voteMode]);
+
+  // Polling alle 3s: liest Stimmen + activeQuestion
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      if (SB_ON) {
+        const [aq, s] = await Promise.all([Store.get("activeQuestion"), sbFetchStats()]);
+        if (!alive) return;
+        setActiveQuestion(aq || null);
+        setLive({
+          q1_before: {
+            baro: s.q1_before
+          },
+          q1_after: {
+            baro: s.q1_after
+          },
+          q2: {
+            agree: s.q2
+          },
+          q3: {
+            baro: s.q3
+          },
+          q4: {
+            agree: s.q4
+          }
+        });
+        return;
+      }
+      const [aq, b1, a1, v2, v3, v4] = await Promise.all([Store.get("activeQuestion"), Store.get("vote:q1_before"), Store.get("vote:q1_after"), Store.get("vote:q2"), Store.get("vote:q3"), Store.get("vote:q4")]);
+      if (!alive) return;
+      setActiveQuestion(aq || null);
+      setLive({
+        q1_before: {
+          baro: baroStats(parseArr(b1))
+        },
+        q1_after: {
+          baro: baroStats(parseArr(a1))
+        },
+        q2: {
+          agree: parseObj(v2)
+        },
+        q3: {
+          baro: baroStats(parseArr(v3))
+        },
+        q4: {
+          agree: parseObj(v4)
+        }
+      });
+    };
+    refresh();
+    const id = setInterval(refresh, 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Tastatur-Navigation
+  useEffect(() => {
+    if (voteMode) return;
+    const onKey = e => {
+      if (e.key === "ArrowRight") setScreen(s => Math.min(TOTAL - 1, s + 1));
+      if (e.key === "ArrowLeft") setScreen(s => Math.max(0, s - 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [voteMode]);
+  if (voteMode) {
+    return /*#__PURE__*/React.createElement(VoteView, {
+      activeQuestion: activeQuestion,
+      live: live
+    });
+  }
+  const qkey = SCREEN_QUESTION[screen];
+  const interactiveProps = qkey ? {
+    qkey,
+    live: live[qkey],
+    manualMode,
+    manualBaro: manual[qkey],
+    setManualBaro: v => setManual(m => ({
+      ...m,
+      [qkey]: v
+    })),
+    manualAgree: manual[qkey],
+    setManualAgree: v => setManual(m => ({
+      ...m,
+      [qkey]: v
+    })),
+    onReset: async () => {
+      await resetKey(qkey);
+    }
+  } : null;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      height: "100vh",
+      width: "100%",
+      background: C.bg,
+      color: C.text,
+      fontFamily: FONT,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%"
+    }
+  }, renderScreen(screen, {
+    live,
+    interactiveProps,
+    link,
+    setLink
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "16px clamp(20px,4vw,60px)",
+      gap: 16,
+      background: "linear-gradient(0deg, rgba(27,29,42,0.95), rgba(27,29,42,0))"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => setScreen(s => Math.max(0, s - 1)),
+    disabled: screen === 0
+  }, "‹ Zurück"), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => setScreen(s => Math.min(TOTAL - 1, s + 1)),
+    disabled: screen === TOTAL - 1
+  }, "Weiter ›")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, Array.from({
+    length: TOTAL
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    onClick: () => setScreen(i),
+    style: {
+      width: i === screen ? 26 : 9,
+      height: 9,
+      borderRadius: 999,
+      background: i === screen ? C.teal : "#ffffff26",
+      cursor: "pointer",
+      transition: "all 300ms"
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.text2,
+      fontSize: 14,
+      marginLeft: 12
+    }
+  }, screen + 1, " / ", TOTAL)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => setVoteMode(true)
+  }, "Handy-Ansicht"), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => setShowQR(v => !v),
+    active: showQR
+  }, "QR"), qkey && /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => setManualMode(v => !v),
+    active: manualMode
+  }, manualMode ? "Manuell: AN" : "Manuell"))), showQR && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      right: "clamp(20px,4vw,60px)",
+      bottom: 90,
+      zIndex: 20
+    }
+  }, /*#__PURE__*/React.createElement(QRPanel, {
+    link: link,
+    setLink: setLink,
+    lead: "Noch nicht dabei? Jetzt scannen — die aktive Frage erscheint automatisch."
+  })));
+
+  // ---- Screen-Renderer ----
+  function renderScreen(i, ctx) {
+    const ip = ctx.interactiveProps;
+    switch (i) {
+      // 1 — Titel
+      case 0:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.teal,
+            fontSize: "clamp(13px,1.2vw,17px)",
+            fontWeight: 600,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            marginBottom: 20
+          }
+        }, "Katholische Religion · Präsentation"), /*#__PURE__*/React.createElement("h1", {
+          style: {
+            fontSize: "clamp(34px,5.5vw,82px)",
+            fontWeight: 700,
+            lineHeight: 1.06,
+            margin: 0,
+            letterSpacing: "-0.02em",
+            maxWidth: 1300
+          }
+        }, "Missbrauch in der katholischen Kirche.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: C.sand
+          }
+        }, "Ein Sonderfall oder ein Spiegel der Gesellschaft?")), /*#__PURE__*/React.createElement("p", {
+          style: {
+            color: C.text2,
+            fontSize: "clamp(16px,1.8vw,26px)",
+            marginTop: 30,
+            maxWidth: 1000,
+            lineHeight: 1.5
+          }
+        }, "Warum steht ausgerechnet die Kirche im Zentrum der Debatte — obwohl Missbrauch fast überall vorkommt?"), /*#__PURE__*/React.createElement("p", {
+          style: {
+            color: C.text2,
+            fontSize: "clamp(13px,1.2vw,17px)",
+            marginTop: 28,
+            opacity: 0.75,
+            maxWidth: 760
+          }
+        }, "Ein sensibles Thema. Wir gehen respektvoll damit um und diskutieren offen."));
+
+      // 2 — Agenda
+      case 1:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Überblick",
+          title: "Agenda"
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            gap: 40,
+            flexWrap: "wrap",
+            alignItems: "flex-start"
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+            flex: 1,
+            minWidth: 340
+          }
+        }, ["Worum geht es? — Die Zahlen der Kirche", "Der Vergleich — Sport, Familie, Gesellschaft", "Das Besondere an der Kirche", "Diskussion — live, mit eurer Abstimmung"].map((t, idx) => /*#__PURE__*/React.createElement("div", {
+          key: idx,
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 20
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            width: 52,
+            height: 52,
+            borderRadius: 16,
+            background: C.card,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: C.teal,
+            fontWeight: 700,
+            fontSize: 22,
+            flexShrink: 0
+          }
+        }, idx + 1), /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(18px,2.4vw,34px)",
+            fontWeight: 600
+          }
+        }, t)))), /*#__PURE__*/React.createElement("div", {
+          style: {
+            width: 360,
+            maxWidth: "100%"
+          }
+        }, /*#__PURE__*/React.createElement(QRPanel, {
+          link: ctx.link,
+          setLink: ctx.setLink
+        }))));
+
+      // 3 — Zahlen MHG
+      case 2:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Die Zahlen · MHG-Studie 2018",
+          title: "Was wir wissen",
+          sub: "Auswertung von 38.156 Personalakten in 27 Bistümern, Zeitraum 1946–2014."
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 22
+          }
+        }, /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(BigStat, {
+          value: 1670,
+          label: "beschuldigte Kleriker — rund 4,4 % der untersuchten Kleriker",
+          accent: C.sand
+        })), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(BigStat, {
+          value: 3677,
+          label: "dokumentierte Betroffene",
+          accent: C.teal
+        })), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(BigStat, {
+          value: 62.8,
+          suffix: " %",
+          format: v => v.toFixed(1).replace(".", ","),
+          label: "der Betroffenen waren männlich — anders als außerhalb der Kirche, wo überwiegend Mädchen betroffen sind",
+          accent: C.blue
+        }))), /*#__PURE__*/React.createElement(Card, {
+          style: {
+            marginTop: 22
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.text,
+            fontSize: "clamp(15px,1.6vw,22px)",
+            lineHeight: 1.5
+          }
+        }, /*#__PURE__*/React.createElement("b", {
+          style: {
+            color: C.sand
+          }
+        }, "Dunkelziffer:"), " Eine Ulmer Schätzung geht von rund ", /*#__PURE__*/React.createElement("b", null, "114.000"), " Betroffenen aus (katholische und evangelische Kirche zusammen). Diese Hochrechnung ist allerdings umstritten — „schwierige Datenbasis\".")), /*#__PURE__*/React.createElement(Quelle, null, "MHG-Studie, Deutsche Bischofskonferenz / Universitäten Mannheim, Heidelberg, Gießen"));
+
+      // 4 — Q1 Barometer (vorher)
+      case 3:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Frage 1 · Live-Barometer (0–100)",
+          title: "Stimmt ihr zu?"
+        }), /*#__PURE__*/React.createElement(Card, {
+          accent: C.sand,
+          style: {
+            marginBottom: 24
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(20px,2.6vw,38px)",
+            fontWeight: 700,
+            lineHeight: 1.2
+          }
+        }, "„", Q.q1.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip), /*#__PURE__*/React.createElement("p", {
+          style: {
+            color: C.text2,
+            fontSize: "clamp(13px,1.3vw,18px)",
+            marginTop: 18
+          }
+        }, "Diese Frage stimmen wir am Ende noch einmal ab — um zu sehen, ob die Diskussion etwas bewegt."));
+
+      // 5 — Vergleich
+      case 4:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Der Vergleich",
+          title: "Missbrauch in anderen Institutionen"
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            gap: 20,
+            flexWrap: "wrap"
+          }
+        }, /*#__PURE__*/React.createElement(ComparisonCol, {
+          accent: C.teal,
+          title: "Sport · „SicherImSport“ 2022",
+          items: [{
+            big: "26 %",
+            label: "erlebten Grenzverletzungen / Belästigung ohne Körperkontakt"
+          }, {
+            big: "19 %",
+            label: "erlebten Übergriffe mit Körperkontakt"
+          }, {
+            big: "84 %",
+            label: "Risiko auf internationalem Niveau (vs. 53 % im Breitensport)"
+          }]
+        }), /*#__PURE__*/React.createElement(ComparisonCol, {
+          accent: C.sand,
+          title: "Familie & Nahraum · UBSKM",
+          items: [{
+            big: "53 %",
+            label: "der gemeldeten Fälle passieren im familiären Kontext"
+          }, {
+            big: "20 %",
+            label: "im sozialen Nahraum · nur ~16 % institutionell"
+          }, {
+            big: "36 %",
+            label: "Väter als Täter (8 % Mütter)"
+          }]
+        }), /*#__PURE__*/React.createElement(ComparisonCol, {
+          accent: C.blue,
+          title: "Gesellschaft · PKS 2024",
+          items: [{
+            big: "16.354",
+            label: "registrierte Fälle Kindesmissbrauch (+1.191 bei Jugendlichen) — nur Hellfeld"
+          }, {
+            big: "jede:r 7.–8.",
+            label: "Erwachsene war laut Dunkelfeld-Schätzung betroffen"
+          }]
+        })), /*#__PURE__*/React.createElement("p", {
+          style: {
+            color: C.text2,
+            fontSize: "clamp(12px,1.2vw,16px)",
+            marginTop: 18
+          }
+        }, "Im Sport bewerteten dennoch 9 von 10 Betroffenen ihren Vereinssport insgesamt positiv."));
+
+      // 6 — Q2 Zustimmung/Ablehnung
+      case 5:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Frage 2 · Zustimmung / Ablehnung",
+          title: "Was meint ihr?"
+        }), /*#__PURE__*/React.createElement(Card, {
+          accent: C.sand,
+          style: {
+            marginBottom: 24
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(19px,2.4vw,34px)",
+            fontWeight: 700,
+            lineHeight: 1.25
+          }
+        }, "„", Q.q2.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip));
+
+      // 7 — Das Besondere
+      case 6:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Das Besondere an der Kirche",
+          title: "Warum sie anders bewertet wird"
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: 18
+          }
+        }, /*#__PURE__*/React.createElement(Punkt, {
+          t: "Moralischer Anspruch",
+          b: "Die Kirche tritt als moralische Instanz auf. Der Widerspruch zwischen Anspruch und Tat wiegt schwerer.",
+          c: C.teal
+        }), /*#__PURE__*/React.createElement(Punkt, {
+          t: "Geschlossenes System & Macht",
+          b: "Asymmetrische Machtverhältnisse und ein geschlossenes System gelten als Faktoren, die Missbrauch begünstigen.",
+          c: C.sand
+        }), /*#__PURE__*/React.createElement(Punkt, {
+          t: "Vertuschung statt Aufklärung",
+          b: "Versetzungen von Tätern — Schutz der Institution vor dem Schutz der Kinder.",
+          c: C.blue
+        }), /*#__PURE__*/React.createElement(Punkt, {
+          t: "Aufarbeitung stockt",
+          b: "Fünf Jahre nach der Studie war im Wesentlichen nur die sorgfältigere Aktenführung wirklich umgesetzt.",
+          c: C.reject
+        })), /*#__PURE__*/React.createElement(Card, {
+          style: {
+            marginTop: 18
+          },
+          accent: C.blue
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.blue,
+            fontWeight: 700,
+            marginBottom: 8
+          }
+        }, "Offene Frage (kein Fakt)"), /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.text,
+            fontSize: "clamp(14px,1.5vw,20px)",
+            lineHeight: 1.5
+          }
+        }, "Ob der Pflichtzölibat Missbrauch verursacht, ist wissenschaftlich ", /*#__PURE__*/React.createElement("b", null, "nicht belegt"), ". Die MHG-Studie sieht ihn nicht als alleinige Ursache, höchstens als Risikofaktor im Zusammenspiel mit Klerikalismus und geschlossenem System.")));
+
+      // 8 — Q3 Stimmungsbild + Diskussion
+      case 7:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Frage 3 · Stimmungsbild + Diskussion",
+          title: "Lenkt der Fokus ab?"
+        }), /*#__PURE__*/React.createElement(Card, {
+          accent: C.sand,
+          style: {
+            marginBottom: 24
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(17px,2.1vw,30px)",
+            fontWeight: 700,
+            lineHeight: 1.3
+          }
+        }, "Über die Hälfte des Missbrauchs passiert in Familien, nur ~16 % in Institutionen. Lenkt der starke Fokus auf die Kirche vom eigentlichen Problem ab — oder ist genau dieser Fokus berechtigt?")), /*#__PURE__*/React.createElement(InteractiveBlock, ip));
+
+      // 9 — Q4 Verantwortung
+      case 8:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Frage 4 · Zustimmung / Ablehnung",
+          title: "Wer trägt Verantwortung?"
+        }), /*#__PURE__*/React.createElement(Card, {
+          accent: C.sand,
+          style: {
+            marginBottom: 24
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(19px,2.4vw,34px)",
+            fontWeight: 700,
+            lineHeight: 1.25
+          }
+        }, "„", Q.q4.thesis, "\"")), /*#__PURE__*/React.createElement(InteractiveBlock, ip));
+
+      // 10 — Abschluss-Barometer (Q1 Wiederholung, vorher/nachher)
+      case 9:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Frage 1 · Wiederholung",
+          title: "Hat sich etwas bewegt?"
+        }), /*#__PURE__*/React.createElement(Card, {
+          accent: C.sand,
+          style: {
+            marginBottom: 24
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: "clamp(17px,2.1vw,30px)",
+            fontWeight: 700,
+            lineHeight: 1.25
+          }
+        }, "„", Q.q1.thesis, "\"")), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            gap: 22,
+            flexWrap: "wrap",
+            marginBottom: 22
+          }
+        }, /*#__PURE__*/React.createElement(Card, {
+          style: {
+            flex: 1,
+            minWidth: 280,
+            opacity: 0.85
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.text2,
+            fontWeight: 600,
+            marginBottom: 16
+          }
+        }, "Vorher (zu Beginn)"), /*#__PURE__*/React.createElement(BaroResult, {
+          avg: live.q1_before.baro.avg,
+          count: live.q1_before.baro.count,
+          lowLabel: Q.q1.low,
+          highLabel: Q.q1.high
+        })), /*#__PURE__*/React.createElement(Card, {
+          style: {
+            flex: 1,
+            minWidth: 280
+          },
+          accent: C.teal
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.teal,
+            fontWeight: 600,
+            marginBottom: 16
+          }
+        }, "Jetzt (nach der Diskussion)"), /*#__PURE__*/React.createElement(InteractiveBlock, ip))), /*#__PURE__*/React.createElement(DeltaLine, {
+          before: live.q1_before.baro,
+          after: manualMode ? {
+            avg: manual.q1_after,
+            count: 0
+          } : live.q1_after.baro
+        }));
+
+      // 11 — Abschluss & Quellen
+      case 10:
+        return /*#__PURE__*/React.createElement(ScreenWrap, null, /*#__PURE__*/React.createElement(SectionTitle, {
+          kicker: "Abschluss",
+          title: "Spiegel der Gesellschaft — oder Sonderfall?",
+          sub: "Die Zahlen ähneln anderen Institutionen. Was die Kirche besonders macht, ist ihr Anspruch, ihr System und der Umgang mit der Aufarbeitung. Die Antwort bleibt eure."
+        }), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "flex",
+            gap: 22,
+            flexWrap: "wrap"
+          }
+        }, /*#__PURE__*/React.createElement(Card, {
+          style: {
+            flex: 1,
+            minWidth: 320
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: C.text2,
+            fontWeight: 600,
+            marginBottom: 14,
+            fontSize: 14,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase"
+          }
+        }, "Quellen"), /*#__PURE__*/React.createElement("ul", {
+          style: {
+            margin: 0,
+            paddingLeft: 20,
+            color: C.text,
+            fontSize: "clamp(13px,1.3vw,18px)",
+            lineHeight: 1.8
+          }
+        }, /*#__PURE__*/React.createElement("li", null, "MHG-Studie (2018) · Deutsche Bischofskonferenz, Universitäten Mannheim / Heidelberg / Gießen"), /*#__PURE__*/React.createElement("li", null, "SicherImSport (2022) · Deutsche Sporthochschule Köln, Uniklinik Ulm, Universität Wuppertal"), /*#__PURE__*/React.createElement("li", null, "UBSKM — Unabhängige Beauftragte für Fragen des sexuellen Kindesmissbrauchs, Zahlen und Fakten"), /*#__PURE__*/React.createElement("li", null, "Polizeiliche Kriminalstatistik 2024 / Bundeslagebild")))));
+      default:
+        return null;
+    }
+  }
+}
+function NavBtn({
+  children,
+  onClick,
+  disabled,
+  active
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    disabled: disabled,
+    style: {
+      background: active ? C.teal : "#ffffff12",
+      color: active ? C.bg : C.text,
+      border: "none",
+      borderRadius: 14,
+      padding: "11px 20px",
+      fontSize: 16,
+      fontWeight: 600,
+      cursor: disabled ? "default" : "pointer",
+      opacity: disabled ? 0.35 : 1
+    }
+  }, children);
+}
+function Quelle({
+  children
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(11px,1.1vw,15px)",
+      marginTop: 18,
+      opacity: 0.8
+    }
+  }, "Quelle: ", children);
+}
+function Punkt({
+  t,
+  b,
+  c
+}) {
+  return /*#__PURE__*/React.createElement(Card, {
+    accent: c
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: c,
+      fontWeight: 700,
+      fontSize: "clamp(17px,1.9vw,26px)",
+      marginBottom: 10
+    }
+  }, t), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(13px,1.4vw,19px)",
+      lineHeight: 1.5
+    }
+  }, b));
+}
+function DeltaLine({
+  before,
+  after
+}) {
+  const d = Math.round((after.avg || 0) - (before.avg || 0));
+  const color = d > 0 ? C.teal : d < 0 ? C.reject : C.text2;
+  const sign = d > 0 ? "+" : "";
+  return /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 16,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(14px,1.5vw,20px)"
+    }
+  }, "Veränderung des Durchschnitts:"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color,
+      fontSize: "clamp(28px,3.4vw,48px)",
+      fontWeight: 700
+    }
+  }, sign, d), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.text2,
+      fontSize: "clamp(13px,1.3vw,18px)"
+    }
+  }, d === 0 ? "— die Diskussion hat das Stimmungsbild nicht verschoben." : d > 0 ? "— die Zustimmung ist gestiegen." : "— die Zustimmung ist gesunken.")));
+}
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
